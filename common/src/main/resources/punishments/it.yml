@@ -1,3 +1,10 @@
+# Relaxed/anarchy default profile.
+#
+# Checks omitted from this file are genuinely disabled in this fork. This means
+# Baritone, scaffold/air-place, vanilla movement prediction, timer, elytra state,
+# no-slow, sprint, knockback and similar behavior checks do not setback/cancel.
+# The explicit SpeedLimit check below is the movement rule that remains.
+#
 # %check_name% - name of the check
 # %description% - description of the check
 # %vl% - violations
@@ -5,51 +12,33 @@
 # %player% - player name
 # [alert] - special command to alert
 # [webhook] - special command to alert to discord webhook
-# [proxy] - special command to alert to other servers connected to your proxy (BungeeCord/Velocity)
+# [proxy] - special command to alert to other servers connected to your proxy
+
 Punishments:
-  Simulation:
+  SpeedCap:
     remove-violations-after: 300
     checks:
-      - "Simulation"
-      - "GroundSpoof"
-      - "Timer"
-      - "TimerLimit"
-      - "NoFall"
+      - "SpeedLimit"
     commands:
-      - "100:40 [alert]"
+      - "1:1 [alert]"
       - "1:1 [log]"
-      - "100:100 [webhook]"
-      - "100:100 [proxy]"
-  Knockback:
+      - "1:1 [webhook]"
+      - "1:1 [proxy]"
+
+  PacketSafety:
     remove-violations-after: 300
     checks:
-      - "Knockback"
-      - "Explosion"
-    commands:
-      - "5:5 [alert]"
-      - "1:1 [log]"
-      - "20:20 [webhook]"
-      - "20:20 [proxy]"
-  Post:
-    remove-violations-after: 300
-    checks:
+      - "BadPackets"
+      - "PacketOrder"
+      - "Crash"
+      - "TransactionOrder"
       - "Post"
     commands:
       - "20:20 [alert]"
       - "1:1 [log]"
       - "40:40 [webhook]"
       - "40:40 [proxy]"
-  BadPackets:
-    remove-violations-after: 300
-    checks:
-      - "BadPackets"
-      - "PacketOrder"
-      - "Crash"
-    commands:
-      - "20:20 [alert]"
-      - "1:1 [log]"
-      - "40:40 [webhook]"
-      - "40:40 [proxy]"
+
   Reach:
     remove-violations-after: 300
     checks:
@@ -59,6 +48,7 @@ Punishments:
       - "1:1 [log]"
       - "1:1 [webhook]"
       - "1:1 [proxy]"
+
   Hitboxes:
     remove-violations-after: 300
     checks:
@@ -68,37 +58,11 @@ Punishments:
       - "1:1 [log]"
       - "5:3 [webhook]"
       - "5:3 [proxy]"
-  Misc:
-    remove-violations-after: 300
-    checks:
-      - "Vehicle"
-      - "NoSlow"
-      - "Sprint"
-      - "MultiActions"
-      - "Place"
-      - "Baritone"
-      - "Break"
-      - "TransactionOrder"
-      - "Elytra"
-      - "Chat"
-      - "Exploit"
-    commands:
-      - "10:5 [alert]"
-      - "1:1 [log]"
-      - "20:10 [webhook]"
-      - "20:10 [proxy]"
+
   Combat:
     remove-violations-after: 300
     checks:
       - "Interact"
-      - "Aim"
-    commands:
-      - "20:40 [alert]"
-      - "1:1 [log]"
-  Autoclicker:
-    remove-violations-after: 300
-    checks:
-      - "Autoclicker"
     commands:
       - "20:40 [alert]"
       - "1:1 [log]"

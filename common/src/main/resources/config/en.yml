@@ -86,6 +86,47 @@ Simulation:
     # 1 for old behavior
     setback-violation-threshold: 1
 
+# Relaxed/anarchy movement cap. This does not care how the player moves; it only
+# limits sustained HORIZONTAL travel rate. Vertical motion is intentionally ignored
+# so long falls do not false. Teleports are ignored.
+SpeedLimit:
+    # Maximum sustained horizontal travel speed in blocks per real-world second.
+    max-horizontal-bps: 8.0
+    # Horizontal ceiling while using vanilla/creative flight (ability-based flying).
+    max-horizontal-bps-flight: 8.0
+    # Horizontal ceiling while actively elytra gliding (not merely wearing one).
+    max-horizontal-bps-glide: 40.0
+    # Horizontal ceiling while in a vehicle (boat, minecart, horse, pig, ...).
+    # Omit or set to -1 to reuse the walk limit (pre-vehicle-tier behavior).
+    max-horizontal-bps-vehicle: 12.0
+    # Temporary token-bucket allowance for lag, knockback, pistons, etc.
+    # 0.25 at 40 b/s permits up to a 10-block one-off burst, but sustained travel
+    # still refills at only 40 blocks/second. Reduce this if you want a harder cap.
+    burst-seconds: 0.25
+    # Minimum seconds between SpeedLimit flags (alerts/logs) on the VEHICLE_MOVE
+    # path. Sustained vehicle-speed violations (e.g. boat-fly) emit packets many
+    # times per second; without throttling every packet becomes a log line.
+    # Packet cancellation/enforcement is NOT throttled - only the output is.
+    # 1.0 = at most one vehicle flag line per second.
+    vehicle-alert-interval-seconds: 1.0
+    # Optional console commands executed when SpeedLimit flags. Each runs
+    # once per emitted flag, dispatched by the console. On the vehicle path
+    # flags are already throttled to one per vehicle-alert-interval-seconds,
+    # so the commands are too. A leading slash is optional.
+    # Placeholders: %player% (alias %player_name%), %uuid%, %tier%.
+    # Per-tier lists: flag-commands-vehicle / -flight / -glide / -walk.
+    # Example:
+    #   flag-commands:
+    #     - "nosavekick %player%"
+    #     - "say %player% exceeded the %tier% speed cap"
+    flag-commands: []
+    flag-commands-vehicle: []
+    flag-commands-flight: []
+    flag-commands-glide: []
+    flag-commands-walk: []
+    # Setback on the first rejected normal movement.
+    setbackvl: 0
+
 # Checks to see if a player entered a block during a movement
 Phase:
     setbackvl: 1 # Glitching into blocks can allow wall climbing, plus this check is relatively stable
