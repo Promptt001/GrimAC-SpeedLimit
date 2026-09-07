@@ -45,6 +45,10 @@
 >
 > All keys are editable in `config.yml` and hot-reloadable. Full details: [RELAXED_FORK_NOTES.md](RELAXED_FORK_NOTES.md).
 > Ready-built Paper jar: see [Releases](../../releases). Based on upstream commit `61caa53e285851917d90dc08dc1b63b99139b50e`.
+>
+> **Works on Minecraft 1.8–26.2.** Boot-verified on Paper 26.2 (plugin enables clean, bundled packetevents loads `V_26_2`,
+> default config + reload OK) and field-verified on Paper 1.21.11 (walk/glide/vehicle tiers). See
+> [RELAXED_FORK_NOTES.md](RELAXED_FORK_NOTES.md) → *Verified environments*.
 
 GrimAC is an open source Minecraft anticheat designed to support the latest versions of Minecraft.
 It currently supports Minecraft versions 1.8–26.2. Geyser players are fully exempt from the anticheat to prevent false positives.

@@ -89,4 +89,11 @@ Grim generally does not replace an already-generated server config just because 
 
 ## Build note
 
-The source was patched in an offline environment. The Gradle wrapper attempted to download Gradle 9.4.1, but outbound DNS/network access was unavailable, so a compiled jar could not be produced or compile-tested here. The changes are intentionally small and localized, but you should run the normal project Gradle build in an environment with dependency access before deploying.
+The ready-built Paper jar in [Releases](../../releases) is produced with the standard project Gradle build (Gradle 9.4.1, `./gradlew build -x test`) from this exact source tree; no manual steps are needed to deploy it.
+
+## Verified environments
+
+- **Paper 1.21.11** (live server, sessions 6–8): walk tier confirmed flagging in production; elytra-glide tier observed flagging at a 50 b/s cap; vehicle (boat-fly) path tested — flags throttled to ~1/s, setback teleport verified working from v5 on.
+- **Paper 26.2-121** (clean boot test): plugin enables with zero errors, bundled packetevents 2.13.1 loads `V_26_2` mappings, default config generates with the 8/8/40/12 tier values, `grim help` / `grim reload` (full `SpeedLimit.onReload` path) run clean. Minecraft 26.2 = protocol 776; the 26.1/26.2 entity-metadata changes in upstream (already part of base `61caa53e`) are included.
+
+The SpeedLimit check itself is version-independent packet math (horizontal `hypot(dx, dz)` token buckets), so behavior on 26.2 matches 1.21.x.
