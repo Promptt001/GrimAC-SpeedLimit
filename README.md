@@ -18,6 +18,34 @@
  <br>
 </div>
 
+> [!IMPORTANT]
+> # GrimAC-SpeedLimit — relaxed anarchy fork
+>
+> This is **not** vanilla GrimAC. It is a fork of [GrimAnticheat/Grim](https://github.com/GrimAnticheat/Grim) (2.0 branch, base `61caa53e`)
+> reworked for **anarchy-tolerant servers**: all movement-*behavior* checks (simulation/prediction, timer, no-fall, no-slow,
+> sprint, elytra-state, knockback) are **disabled** so clients like Meteor/Baritone are allowed — movement is policed only by a
+> single configurable **SpeedLimit** check, while combat checks (Reach, Hitboxes) and packet-safety checks (BadPackets, Crash,
+> PacketOrder, TransactionOrder, Post) **stay enabled**.
+>
+> **What the SpeedLimit check does:** caps sustained horizontal travel rate with four independent, per-state token buckets
+> (blocks per real-world second), selected per movement update from Grim's compensated state — merely *wearing* an elytra does
+> **not** count as gliding; vertical motion and teleports are ignored:
+>
+> | State | Config key | Default |
+> |---|---|---|
+> | Walk / sprint / Baritone / ground mods | `SpeedLimit.max-horizontal-bps` | 8.0 |
+> | Vanilla/creative flight | `SpeedLimit.max-horizontal-bps-flight` | 8.0 |
+> | Active elytra gliding | `SpeedLimit.max-horizontal-bps-glide` | 40.0 |
+> | Vehicle (boat, minecart, horse, ...) | `SpeedLimit.max-horizontal-bps-vehicle` | 12.0 |
+>
+> Short lag/knockback/piston transients are absorbed by `burst-seconds` (0.25 s). Vehicle violations
+> (`VEHICLE_MOVE`, e.g. boat-fly) cancel **every** offending packet **and** trigger a real Grim setback; flag output is throttled
+> to one per `vehicle-alert-interval-seconds` (1.0 s). Optional `flag-commands` (global or per tier) run console commands on a
+> flag with `%player%`, `%uuid%`, `%tier%` placeholders.
+>
+> All keys are editable in `config.yml` and hot-reloadable. Full details: [RELAXED_FORK_NOTES.md](RELAXED_FORK_NOTES.md).
+> Ready-built Paper jar: see [Releases](../../releases). Based on upstream commit `61caa53e285851917d90dc08dc1b63b99139b50e`.
+
 GrimAC is an open source Minecraft anticheat designed to support the latest versions of Minecraft.
 It currently supports Minecraft versions 1.8–26.2. Geyser players are fully exempt from the anticheat to prevent false positives.
 This project is considered feature-complete for the 2.0 (open-source) branch. If you would like a bug fix or enhancement and cannot sponsor the work, pull requests are welcome.
