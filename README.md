@@ -37,6 +37,7 @@
 > | Vanilla/creative flight | `SpeedLimit.max-horizontal-bps-flight` | 8.0 |
 > | Active elytra gliding | `SpeedLimit.max-horizontal-bps-glide` | 40.0 |
 > | Vehicle (boat, minecart, horse, ...) | `SpeedLimit.max-horizontal-bps-vehicle` | 12.0 |
+> | Boat on ice / packed / blue ice (verified server-side) | `SpeedLimit.max-horizontal-bps-vehicle-ice` | 80.0 |
 >
 > Short lag/knockback/piston transients are absorbed by `burst-seconds` (0.25 s). Vehicle violations
 > (`VEHICLE_MOVE`, e.g. boat-fly) cancel **every** offending packet **and** trigger a real Grim setback; flag output is throttled

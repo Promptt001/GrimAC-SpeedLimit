@@ -33,6 +33,12 @@ SpeedLimit:
     max-horizontal-bps-glide: 40.0
     # Vehicles: boat, minecart, horse, pig, etc. Omit or set to -1 to reuse the walk limit.
     max-horizontal-bps-vehicle: 12.0
+    # Boats supported by ice (ice / packed / blue / frosted) get their own,
+    # higher ceiling: vanilla blue-ice boats reach ~72.73 bps. The ice tier is
+    # only entered when the compensated (server-authoritative) world shows an
+    # ice block under the hull — a boat-fly hovering above the road is NOT on
+    # ice and stays under the low general vehicle cap. -1/omitted = vehicle limit.
+    max-horizontal-bps-vehicle-ice: 80.0
     burst-seconds: 0.25
     # At most one vehicle-path flag (alert/log) per this many seconds.
     vehicle-alert-interval-seconds: 1.0
@@ -53,14 +59,15 @@ The limiter uses a token bucket per movement state, with four independently conf
 - `max-horizontal-bps` — everything else (walking, sprinting, swimming, Baritone pathing, and merely wearing an elytra without gliding).
 - `max-horizontal-bps-flight` — vanilla/creative flight (ability-based flying).
 - `max-horizontal-bps-glide` — active elytra gliding (Grim's compensated `isGliding` state; only true while actually gliding).
-- `max-horizontal-bps-vehicle` — client-driven vehicle movement (boat-fly, ice-road boats, etc.). Backward compatible: if the key is missing or `-1`, the walk limit is used, so pre-vehicle-tier configs behave exactly as before.
+- `max-horizontal-bps-vehicle` — client-driven vehicle movement (boat-fly, etc.). Backward compatible: if the key is missing or `-1`, the walk limit is used, so pre-vehicle-tier configs behave exactly as before.
+- `max-horizontal-bps-vehicle-ice` (v8) — boats genuinely supported by ice (ice / packed ice / blue ice / frosted ice, verified against the compensated world so it cannot be spoofed by a modified client). Lets vanilla ice-boat highways run at full speed (blue ice tops out at ~72.73 bps; default 80.0) while the low general vehicle cap still stops boat-fly in mid-air. If the key is missing or `-1`, the general vehicle limit is used (pre-v8 behavior).
 - `vehicle-alert-interval-seconds` — throttle for SpeedLimit flag output on the VEHICLE_MOVE path. Sustained vehicle violations (e.g. boat-fly) send many packets per second; every violating packet is still cancelled AND triggers a real Grim setback (enforcement is not throttled), but alerts/logs/VL are emitted at most once per this interval. Default 1.0 s.
 
 ### Flag commands
 
 `flag-commands` (and the per-tier `flag-commands-<tier>` lists) execute console commands whenever `SpeedLimit` actually emits a flag. This is the `nosavekick %player%` hook: a command on the server, run by console, when a player exceeds the speed cap in the chosen tier.
 
-- Placeholders: `%player%` / `%player_name%` (player name), `%uuid%`, `%tier%` (`walk`, `vehicle`, `flight`, `elytra-glide`), plus everything Grim's placeholder machinery supports (including PlaceholderAPI when present).
+- Placeholders: `%player%` / `%player_name%` (player name), `%uuid%`, `%tier%` (`walk`, `vehicle`, `vehicle-ice`, `flight`, `elytra-glide`), plus everything Grim's placeholder machinery supports (including PlaceholderAPI when present). The `vehicle-ice` tier runs the `flag-commands-vehicle` list (ice boats are still vehicles).
 - Commands run once per **emitted** flag. On the vehicle path, the flag is already throttled to one per `vehicle-alert-interval-seconds`, so commands are automatically rate-limited too (at most one execution per command per interval).
 - A leading `/` is optional: `nosavekick %player%` and `/nosavekick %player%` are equivalent.
 - Dispatch is via Grim's global region scheduler and the console sender, the same path Grim's own punishment commands use, so commands are thread-safe to run from the movement/packet threads.
@@ -74,6 +81,8 @@ SpeedLimit:
     flag-commands-vehicle:
         - "nosavekick %player%"
 ```
+
+**Boat-on-ice tier (v8):** the vehicle tier splits in two when the rider is in a boat: `vehicle-ice` (ice under the hull in the compensated world → higher ceiling) vs `vehicle` (everything else, including boat-fly in mid-air → low general cap). Ice is checked in the slab just under the hull bottom (mirroring Grim's own boat ground-friction sampling), using the transaction-synced compensated world the client cannot spoof. Buckets are independent, so allowance cannot be banked in one and spent in the other; the ice tier uses the same cancel + violation-setback enforcement, throttled alerting, and flag-command path (vehicle list) as the vehicle tier.
 
 **Vehicle desync fix (v5):** cancelling a VEHICLE_MOVE packet alone is invisible to the client — the server drops it and never tells the client anything, so a boat-fly client keeps flying locally while the server (and observers) see it frozen, until vanilla Paper's floating-vehicle check kicks it. The vehicle path therefore now also calls `SetbackTeleportUtil.executeViolationSetback()` on every violating packet, which sends the stock dismount + vehicle-teleport + player-teleport sequence to the client so it actually perceives the correction (`blockMovementsUntilResync` self-throttles via `isPendingSetback`).
 

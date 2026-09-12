@@ -247,6 +247,11 @@ SpeedLimit:
     # Horizontal ceiling while in a vehicle (boat, minecart, horse, pig, ...).
     # Omit or set to -1 to reuse the walk limit (pre-vehicle-tier behavior).
     max-horizontal-bps-vehicle: 12.0
+    # Horizontal ceiling while riding a boat supported by ice (ice / packed ice / blue ice).
+    # Vanilla blue-ice boats reach ~72.73 bps; 80.0 gives legit highways headroom
+    # while a low max-horizontal-bps-vehicle still caps boat-fly in mid-air.
+    # Omit or set to -1 to reuse the general vehicle limit (pre-v8 behavior).
+    max-horizontal-bps-vehicle-ice: 80.0
     burst-seconds: 0.25
     # Minimum seconds between SpeedLimit flags (alerts/logs) on the VEHICLE_MOVE
     # path. Sustained vehicle-speed violations (e.g. boat-fly) emit packets many

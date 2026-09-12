@@ -11,8 +11,13 @@ import ac.grim.grimac.player.GrimPlayer;
 import ac.grim.grimac.utils.anticheat.LogUtil;
 import ac.grim.grimac.utils.anticheat.MessageUtil;
 import ac.grim.grimac.utils.anticheat.update.PositionUpdate;
+import ac.grim.grimac.utils.collisions.datatypes.SimpleCollisionBox;
+import ac.grim.grimac.utils.data.packetentity.PacketEntity;
+import ac.grim.grimac.utils.nmsutil.GetBoundingBox;
 import com.github.retrooper.packetevents.event.PacketReceiveEvent;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
+import com.github.retrooper.packetevents.protocol.world.states.type.StateType;
+import com.github.retrooper.packetevents.protocol.world.states.type.StateTypes;
 import com.github.retrooper.packetevents.util.Vector3d;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientVehicleMove;
 import org.jetbrains.annotations.NotNull;
@@ -28,12 +33,19 @@ import java.util.List;
  * caused by latency, knockback, pistons, etc. have some tolerance while a
  * client cannot sustain travel above the configured blocks-per-second rate.</p>
  *
- * <p>Four independently configurable horizontal speed ceilings are applied
+ * <p>Five independently configurable horizontal speed ceilings are applied
  * depending on the player's compensated movement state: vehicles (boat,
- * minecart, horse, etc.), vanilla/creative flight, active elytra gliding, and
- * everything else (walking, sprinting, swimming, Baritone pathing, etc.).
- * Merely wearing an elytra without gliding falls into the "everything else"
- * tier.</p>
+ * minecart, horse, etc.), boats supported by ice (v8 - lets vanilla ice-boat
+ * highways run at full speed while a low general vehicle cap still stops
+ * boat-fly), vanilla/creative flight, active elytra gliding, and everything
+ * else (walking, sprinting, swimming, Baritone pathing, etc.). Merely wearing
+ * an elytra without gliding falls into the "everything else" tier.</p>
+ *
+ * <p>The vehicle-ice tier is selected only when the riding entity is a boat
+ * AND the compensated (server-authoritative, transaction-synced) world shows
+ * an ice block directly under the boat hull. A boat-fly client in mid-air
+ * never satisfies that condition - the server knows what blocks the client
+ * was sent - so it stays under the low general vehicle cap.</p>
  *
  * <p>Optionally, console commands can be executed when a flag is emitted
  * ({@code SpeedLimit.flag-commands} for all tiers plus per-tier lists such as
@@ -54,17 +66,20 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
 
     /** Tier identifiers for configuration and debug output. */
     private static final String TIER_VEHICLE = "vehicle";
+    private static final String TIER_VEHICLE_ICE = "vehicle-ice";
     private static final String TIER_FLIGHT = "flight";
     private static final String TIER_GLIDE = "elytra-glide";
     private static final String TIER_WALK = "walk";
 
     private final Bucket vehicleBucket = new Bucket();
+    private final Bucket vehicleIceBucket = new Bucket();
     private final Bucket flightBucket = new Bucket();
     private final Bucket glideBucket = new Bucket();
     private final Bucket walkBucket = new Bucket();
 
     private double maxHorizontalBps;        // walk tier (existing key)
     private double maxHorizontalBpsVehicle; // vehicle tier (boats, minecarts, horses, ...)
+    private double maxHorizontalBpsVehicleIce; // boat-on-ice tier (v8)
     private double maxHorizontalBpsFlight;  // vanilla/creative flight tier
     private double maxHorizontalBpsGlide;   // active elytra gliding tier
     private double burstSeconds;
@@ -174,7 +189,11 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
 
         // Vehicles use their own tier: boats/minecarts/horses legitimately move
         // faster than walking, so the owner may want a different ceiling here.
-        final String tier = TIER_VEHICLE;
+        // A boat supported by server-known ice gets the higher vehicle-ice
+        // ceiling (v8) so vanilla ice-boat highways are unrestricted; anything
+        // else - including boat-fly hovering above the ice - stays under the
+        // general vehicle cap.
+        final String tier = vehicleTierFor(to);
         final Bucket bucket = bucketFor(tier);
         if (!tier.equals(lastTier)) {
             resetAllBuckets();
@@ -290,6 +309,7 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
     private List<String> commandsFor(String tier) {
         switch (tier) {
             case TIER_VEHICLE:
+            case TIER_VEHICLE_ICE: // ice boats are still vehicles; run the vehicle list
                 return flagCommandsVehicle;
             case TIER_GLIDE:
                 return flagCommandsGlide;
@@ -326,6 +346,8 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         switch (tier) {
             case TIER_VEHICLE:
                 return vehicleBucket;
+            case TIER_VEHICLE_ICE:
+                return vehicleIceBucket;
             case TIER_GLIDE:
                 return glideBucket;
             case TIER_FLIGHT:
@@ -335,10 +357,69 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         }
     }
 
+    /**
+     * Chooses between the general vehicle tier and the boat-on-ice tier for a
+     * VEHICLE_MOVE packet.
+     *
+     * <p>The ice tier requires (a) the riding entity to be a boat, and (b) an
+     * ice block (ice / packed ice / blue ice / frosted ice) intersecting the
+     * thin slab just under the boat hull, according to the compensated world.
+     * The compensated world is built from the block-change packets the server
+     * actually sent the client and is transaction-synced, so a modified
+     * client cannot claim to be on ice it is not standing on. A boat-fly
+     * hovering in the air sees air under the hull and is therefore checked
+     * against the low general vehicle limit.</p>
+     *
+     * <p>Vanilla physics: a boat on ice reaches roughly 40 b/s, on blue ice
+     * roughly 72.73 b/s, so the default vehicle-ice ceiling of 80.0 gives
+     * legit ice-boat highways a little headroom while keeping a far lower
+     * general vehicle cap meaningful.</p>
+     */
+    private String vehicleTierFor(final Vector3d vehiclePos) {
+        final PacketEntity riding = player.compensatedEntities.self.getRiding();
+        if (riding == null || !riding.isBoat) {
+            return TIER_VEHICLE;
+        }
+
+        // Hull footprint: same box Grim's own boat prediction uses
+        // (GetBoundingBox.getPacketEntityBoundingBox), shrunk to a slab just
+        // under the bottom of the hull so a boat hovering above ice does not
+        // count as being on it. A floating boat is 0.625 blocks above the
+        // water surface, and a grounded boat hull bottom sits at the boat's
+        // position Y - sampling from minY-0.2 down to minY+0.05 catches both
+        // a grounded hull and (importantly) the slightly-submerged position
+        // a boat has while planing on ice.
+        final SimpleCollisionBox hull = GetBoundingBox.getPacketEntityBoundingBox(
+                player, vehiclePos.getX(), vehiclePos.getY(), vehiclePos.getZ(), riding);
+        final int minX = (int) Math.floor(hull.minX);
+        final int maxX = (int) Math.floor(hull.maxX - EPSILON);
+        final int minY = (int) Math.floor(hull.minY - 0.2);
+        final int maxY = (int) Math.floor(hull.minY + 0.05);
+        final int minZ = (int) Math.floor(hull.minZ);
+        final int maxZ = (int) Math.floor(hull.maxZ - EPSILON);
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    final StateType block = player.compensatedWorld.getBlockType(x, y, z);
+                    if (block == StateTypes.ICE
+                            || block == StateTypes.PACKED_ICE
+                            || block == StateTypes.BLUE_ICE
+                            || block == StateTypes.FROSTED_ICE) {
+                        return TIER_VEHICLE_ICE;
+                    }
+                }
+            }
+        }
+        return TIER_VEHICLE;
+    }
+
     private double rateFor(String tier) {
         switch (tier) {
             case TIER_VEHICLE:
                 return maxHorizontalBpsVehicle;
+            case TIER_VEHICLE_ICE:
+                return maxHorizontalBpsVehicleIce;
             case TIER_GLIDE:
                 return maxHorizontalBpsGlide;
             case TIER_FLIGHT:
@@ -359,6 +440,7 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
 
         final long now = System.nanoTime();
         final String tier = bucket == vehicleBucket ? TIER_VEHICLE
+                : bucket == vehicleIceBucket ? TIER_VEHICLE_ICE
                 : bucket == glideBucket ? TIER_GLIDE
                 : bucket == flightBucket ? TIER_FLIGHT
                 : TIER_WALK;
@@ -392,10 +474,11 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         // the Bucket fields are still null - treat the premature reset as a
         // no-op. The constructor's own resetAllBuckets() call (after super())
         // performs the real initial fill using the already-loaded rates.
-        if (vehicleBucket == null || flightBucket == null || glideBucket == null || walkBucket == null) {
+        if (vehicleBucket == null || vehicleIceBucket == null || flightBucket == null || glideBucket == null || walkBucket == null) {
             return;
         }
         resetBucket(vehicleBucket, TIER_VEHICLE);
+        resetBucket(vehicleIceBucket, TIER_VEHICLE_ICE);
         resetBucket(flightBucket, TIER_FLIGHT);
         resetBucket(glideBucket, TIER_GLIDE);
         resetBucket(walkBucket, TIER_WALK);
@@ -415,6 +498,10 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         // configs (pre-vehicle-tier) behave exactly as before.
         final double vehicleBps = config.getDoubleElse("SpeedLimit.max-horizontal-bps-vehicle", -1.0);
         maxHorizontalBpsVehicle = vehicleBps > 0.0 ? Math.max(1.0, vehicleBps) : maxHorizontalBps;
+        // Boat-on-ice tier (v8). Absent/negative falls back to the general
+        // vehicle limit so pre-v8 configs behave exactly as before.
+        final double vehicleIceBps = config.getDoubleElse("SpeedLimit.max-horizontal-bps-vehicle-ice", -1.0);
+        maxHorizontalBpsVehicleIce = vehicleIceBps > 0.0 ? Math.max(1.0, vehicleIceBps) : maxHorizontalBpsVehicle;
         burstSeconds = Math.max(0.05, config.getDoubleElse("SpeedLimit.burst-seconds", 0.25));
         vehicleAlertIntervalSeconds = Math.max(0.05, config.getDoubleElse("SpeedLimit.vehicle-alert-interval-seconds", 1.0));
         flagCommands = commandList(config, "SpeedLimit.flag-commands");
