@@ -27,7 +27,7 @@
 > single configurable **SpeedLimit** check, while combat checks (Reach, Hitboxes) and packet-safety checks (BadPackets, Crash,
 > PacketOrder, TransactionOrder, Post) **stay enabled**.
 >
-> **What the SpeedLimit check does:** caps sustained horizontal travel rate with four independent, per-state token buckets
+> **What the SpeedLimit check does:** caps sustained horizontal travel rate with independent, per-state token buckets
 > (blocks per real-world second), selected per movement update from Grim's compensated state — merely *wearing* an elytra does
 > **not** count as gliding; vertical motion and teleports are ignored:
 >
@@ -36,7 +36,15 @@
 > | Walk / sprint / Baritone / ground mods | `SpeedLimit.max-horizontal-bps` | 8.0 |
 > | Vanilla/creative flight | `SpeedLimit.max-horizontal-bps-flight` | 8.0 |
 > | Active elytra gliding | `SpeedLimit.max-horizontal-bps-glide` | 40.0 |
-> | Vehicle (boat, minecart, horse, ...) | `SpeedLimit.max-horizontal-bps-vehicle` | 12.0 |
+> | Vehicle, any other type (fallback) | `SpeedLimit.max-horizontal-bps-vehicle` | 12.0 |
+> | Boat on water or land | `SpeedLimit.max-horizontal-bps-vehicle-boat` | 12.0 |
+> | Horse / donkey / mule (fastest breed 14.23 bps) | `SpeedLimit.max-horizontal-bps-vehicle-horse` | 16.0 |
+> | Camel (incl. dash) | `SpeedLimit.max-horizontal-bps-vehicle-camel` | 10.0 |
+> | Minecart on powered rail (8.0 bps) | `SpeedLimit.max-horizontal-bps-vehicle-minecart` | 9.0 |
+> | Saddled pig with carrot on a stick | `SpeedLimit.max-horizontal-bps-vehicle-pig` | 6.0 |
+> | Strider on lava (boost ~7.3 bps) | `SpeedLimit.max-horizontal-bps-vehicle-strider` | 8.0 |
+> | Happy ghast | `SpeedLimit.max-horizontal-bps-vehicle-ghast` | 5.0 |
+> | Nautilus (incl. dash) | `SpeedLimit.max-horizontal-bps-vehicle-nautilus` | 8.0 |
 > | Boat on ice / packed / blue ice (verified server-side) | `SpeedLimit.max-horizontal-bps-vehicle-ice` | 80.0 |
 >
 > Short lag/knockback/piston transients are absorbed by `burst-seconds` (0.25 s). Vehicle violations

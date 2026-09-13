@@ -256,6 +256,29 @@ SpeedLimit:
     # while a low max-horizontal-bps-vehicle still caps boat-fly in mid-air.
     # Omit or set to -1 to reuse the general vehicle limit (pre-v8 behavior).
     max-horizontal-bps-vehicle-ice: 80.0
+    # Horizontal ceiling while riding a boat on water or land (not on ice).
+    # Vanilla boats on flat water reach 8.0 bps; 12.0 gives headroom for
+    # rapids/boosts. Omit or set to -1 to reuse the general vehicle limit.
+    max-horizontal-bps-vehicle-boat: 12.0
+    # Horizontal ceilings per vehicle type. Defaults are the fastest speed
+    # each vehicle type can legitimately reach in vanilla, plus a little
+    # headroom (horses can also receive Speed potions):
+    #   horse/donkey/mule: fastest breed 14.23 bps -> 16.0
+    #   camel (incl. dash bursts): ~10 bps
+    #   minecart on powered rail: 8.0 bps -> 9.0
+    #   saddled pig with carrot on a stick: ~4.2 bps -> 6.0
+    #   strider on lava with boost: ~7.3 bps -> 8.0
+    #   happy ghast: ~3.6 bps -> 5.0
+    #   nautilus (incl. zombie nautilus dash): ~7.2 bps -> 8.0
+    # Omit any key or set it to -1 to reuse the general vehicle limit
+    # (pre-v9 behavior).
+    max-horizontal-bps-vehicle-horse: 16.0
+    max-horizontal-bps-vehicle-camel: 10.0
+    max-horizontal-bps-vehicle-minecart: 9.0
+    max-horizontal-bps-vehicle-pig: 6.0
+    max-horizontal-bps-vehicle-strider: 8.0
+    max-horizontal-bps-vehicle-ghast: 5.0
+    max-horizontal-bps-vehicle-nautilus: 8.0
     burst-seconds: 0.25
     # Minimum seconds between SpeedLimit flags (alerts/logs) on the VEHICLE_MOVE
     # path. Sustained vehicle-speed violations (e.g. boat-fly) emit packets many

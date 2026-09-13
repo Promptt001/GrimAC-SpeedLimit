@@ -31,14 +31,26 @@ SpeedLimit:
     max-horizontal-bps-flight: 8.0
     # Active elytra gliding. Wearing an elytra without gliding uses the walk tier.
     max-horizontal-bps-glide: 40.0
-    # Vehicles: boat, minecart, horse, pig, etc. Omit or set to -1 to reuse the walk limit.
+    # Vehicles, general fallback for types without their own key below.
+    # Omit or set to -1 to reuse the walk limit.
     max-horizontal-bps-vehicle: 12.0
     # Boats supported by ice (ice / packed / blue / frosted) get their own,
     # higher ceiling: vanilla blue-ice boats reach ~72.73 bps. The ice tier is
     # only entered when the compensated (server-authoritative) world shows an
     # ice block under the hull — a boat-fly hovering above the road is NOT on
-    # ice and stays under the low general vehicle cap. -1/omitted = vehicle limit.
+    # ice and stays under the low boat cap. -1/omitted = vehicle limit.
     max-horizontal-bps-vehicle-ice: 80.0
+    # Per-vehicle-type ceilings (v9). Defaults are the fastest speed each type
+    # can legitimately reach in vanilla, plus headroom (horses can also get
+    # Speed potions). Omit any key or set -1 to reuse the general vehicle limit.
+    max-horizontal-bps-vehicle-boat: 12.0
+    max-horizontal-bps-vehicle-horse: 16.0
+    max-horizontal-bps-vehicle-camel: 10.0
+    max-horizontal-bps-vehicle-minecart: 9.0
+    max-horizontal-bps-vehicle-pig: 6.0
+    max-horizontal-bps-vehicle-strider: 8.0
+    max-horizontal-bps-vehicle-ghast: 5.0
+    max-horizontal-bps-vehicle-nautilus: 8.0
     burst-seconds: 0.25
     # At most one vehicle-path flag (alert/log) per this many seconds.
     vehicle-alert-interval-seconds: 1.0
@@ -54,20 +66,21 @@ SpeedLimit:
     setbackvl: 0
 ```
 
-The limiter uses a token bucket per movement state, with four independently configurable horizontal ceilings selected per movement update:
+The limiter uses one token bucket per movement tier, with independently configurable horizontal ceilings selected per movement update:
 
 - `max-horizontal-bps` — everything else (walking, sprinting, swimming, Baritone pathing, and merely wearing an elytra without gliding).
 - `max-horizontal-bps-flight` — vanilla/creative flight (ability-based flying).
 - `max-horizontal-bps-glide` — active elytra gliding (Grim's compensated `isGliding` state; only true while actually gliding).
-- `max-horizontal-bps-vehicle` — client-driven vehicle movement (boat-fly, etc.). Backward compatible: if the key is missing or `-1`, the walk limit is used, so pre-vehicle-tier configs behave exactly as before.
-- `max-horizontal-bps-vehicle-ice` (v8) — boats genuinely supported by ice (ice / packed ice / blue ice / frosted ice, verified against the compensated world so it cannot be spoofed by a modified client). Lets vanilla ice-boat highways run at full speed (blue ice tops out at ~72.73 bps; default 80.0) while the low general vehicle cap still stops boat-fly in mid-air. If the key is missing or `-1`, the general vehicle limit is used (pre-v8 behavior).
+- `max-horizontal-bps-vehicle` — general vehicle fallback for rideable types without their own key. Backward compatible: if the key is missing or `-1`, the walk limit is used, so pre-vehicle-tier configs behave exactly as before.
+- `max-horizontal-bps-vehicle-ice` (v8) — boats genuinely supported by ice (ice / packed ice / blue ice / frosted ice, verified against the compensated world so it cannot be spoofed by a modified client). Lets vanilla ice-boat highways run at full speed (blue ice tops out at ~72.73 bps; default 80.0) while the low boat cap still stops boat-fly in mid-air. If the key is missing or `-1`, the general vehicle limit is used (pre-v8 behavior).
+- Per-vehicle-type tiers (v9) — the vehicle tier is selected per entity type from the compensated entity (spawned/metadata'd by the server itself, so the type cannot be spoofed). Defaults are the fastest legitimate vanilla speed per type with headroom: `vehicle-boat` 12.0 (flat water 8.0; rapids/boost headroom), `vehicle-horse` 16.0 (fastest breed 14.23 bps + Speed-potion headroom), `vehicle-camel` 10.0 (sprint ~8 bps + dash bursts), `vehicle-minecart` 9.0 (powered rail 8.0), `vehicle-pig` 6.0 (carrot-on-a-stick boost ~4.2), `vehicle-strider` 8.0 (lava + boost ~7.3), `vehicle-ghast` 5.0 (happy ghast ~3.6), `vehicle-nautilus` 8.0 (incl. zombie nautilus dash ~7.2). Each key: missing/`-1` → general vehicle limit (pre-v9 behavior). Horses cover donkeys/mules/zombie/skeleton horses; camels (a horse subclass) get the camel tier first; all vehicle-family tiers run the `flag-commands-vehicle` list.
 - `vehicle-alert-interval-seconds` — throttle for SpeedLimit flag output on the VEHICLE_MOVE path. Sustained vehicle violations (e.g. boat-fly) send many packets per second; every violating packet is still cancelled AND triggers a real Grim setback (enforcement is not throttled), but alerts/logs/VL are emitted at most once per this interval. Default 1.0 s.
 
 ### Flag commands
 
 `flag-commands` (and the per-tier `flag-commands-<tier>` lists) execute console commands whenever `SpeedLimit` actually emits a flag. This is the `nosavekick %player%` hook: a command on the server, run by console, when a player exceeds the speed cap in the chosen tier.
 
-- Placeholders: `%player%` / `%player_name%` (player name), `%uuid%`, `%tier%` (`walk`, `vehicle`, `vehicle-ice`, `flight`, `elytra-glide`), plus everything Grim's placeholder machinery supports (including PlaceholderAPI when present). The `vehicle-ice` tier runs the `flag-commands-vehicle` list (ice boats are still vehicles).
+- Placeholders: `%player%` / `%player_name%` (player name), `%uuid%`, `%tier%` (`walk`, `vehicle`, `vehicle-ice`, `vehicle-boat`, `vehicle-horse`, `vehicle-camel`, `vehicle-minecart`, `vehicle-pig`, `vehicle-strider`, `vehicle-ghast`, `vehicle-nautilus`, `flight`, `elytra-glide`), plus everything Grim's placeholder machinery supports (including PlaceholderAPI when present). All vehicle-family tiers run the `flag-commands-vehicle` list.
 - Commands run once per **emitted** flag. On the vehicle path, the flag is already throttled to one per `vehicle-alert-interval-seconds`, so commands are automatically rate-limited too (at most one execution per command per interval).
 - A leading `/` is optional: `nosavekick %player%` and `/nosavekick %player%` are equivalent.
 - Dispatch is via Grim's global region scheduler and the console sender, the same path Grim's own punishment commands use, so commands are thread-safe to run from the movement/packet threads.

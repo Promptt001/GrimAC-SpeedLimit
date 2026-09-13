@@ -13,8 +13,12 @@ import ac.grim.grimac.utils.anticheat.MessageUtil;
 import ac.grim.grimac.utils.anticheat.update.PositionUpdate;
 import ac.grim.grimac.utils.collisions.datatypes.SimpleCollisionBox;
 import ac.grim.grimac.utils.data.packetentity.PacketEntity;
+import ac.grim.grimac.utils.data.packetentity.PacketEntityCamel;
+import ac.grim.grimac.utils.data.packetentity.PacketEntityNautilus;
+import ac.grim.grimac.utils.data.packetentity.PacketEntityStrider;
 import ac.grim.grimac.utils.nmsutil.GetBoundingBox;
 import com.github.retrooper.packetevents.event.PacketReceiveEvent;
+import com.github.retrooper.packetevents.protocol.entity.type.EntityTypes;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.protocol.world.states.type.StateType;
 import com.github.retrooper.packetevents.protocol.world.states.type.StateTypes;
@@ -23,7 +27,9 @@ import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientVe
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A deliberately simple travel-rate limiter for relaxed/anarchy servers.
@@ -33,19 +39,23 @@ import java.util.List;
  * caused by latency, knockback, pistons, etc. have some tolerance while a
  * client cannot sustain travel above the configured blocks-per-second rate.</p>
  *
- * <p>Five independently configurable horizontal speed ceilings are applied
- * depending on the player's compensated movement state: vehicles (boat,
- * minecart, horse, etc.), boats supported by ice (v8 - lets vanilla ice-boat
- * highways run at full speed while a low general vehicle cap still stops
- * boat-fly), vanilla/creative flight, active elytra gliding, and everything
- * else (walking, sprinting, swimming, Baritone pathing, etc.). Merely wearing
- * an elytra without gliding falls into the "everything else" tier.</p>
+ * <p>Independently configurable horizontal speed ceilings are applied
+ * depending on the player's compensated movement state: vanilla/creative
+ * flight, active elytra gliding, everything else (walking, sprinting,
+ * swimming, Baritone pathing, etc. - merely wearing an elytra without gliding
+ * falls here), and a family of vehicle tiers. Vehicles are tiered per entity
+ * type (v9 - boat, horse, camel, minecart, pig, strider, happy ghast,
+ * nautilus, each defaulting to the fastest speed that vehicle type can
+ * legitimately reach in vanilla) plus a general vehicle fallback for anything
+ * else. Boats supported by ice get their own higher tier (v8 - lets vanilla
+ * ice-boat highways run at full speed while a low boat cap still stops
+ * boat-fly).</p>
  *
  * <p>The vehicle-ice tier is selected only when the riding entity is a boat
  * AND the compensated (server-authoritative, transaction-synced) world shows
  * an ice block directly under the boat hull. A boat-fly client in mid-air
  * never satisfies that condition - the server knows what blocks the client
- * was sent - so it stays under the low general vehicle cap.</p>
+ * was sent - so it stays under the low boat cap (vehicle-boat).</p>
  *
  * <p>Optionally, console commands can be executed when a flag is emitted
  * ({@code SpeedLimit.flag-commands} for all tiers plus per-tier lists such as
@@ -67,19 +77,41 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
     /** Tier identifiers for configuration and debug output. */
     private static final String TIER_VEHICLE = "vehicle";
     private static final String TIER_VEHICLE_ICE = "vehicle-ice";
+    private static final String TIER_VEHICLE_BOAT = "vehicle-boat";
+    private static final String TIER_VEHICLE_HORSE = "vehicle-horse";
+    private static final String TIER_VEHICLE_CAMEL = "vehicle-camel";
+    private static final String TIER_VEHICLE_MINECART = "vehicle-minecart";
+    private static final String TIER_VEHICLE_PIG = "vehicle-pig";
+    private static final String TIER_VEHICLE_STRIDER = "vehicle-strider";
+    private static final String TIER_VEHICLE_GHAST = "vehicle-ghast";
+    private static final String TIER_VEHICLE_NAUTILUS = "vehicle-nautilus";
     private static final String TIER_FLIGHT = "flight";
     private static final String TIER_GLIDE = "elytra-glide";
     private static final String TIER_WALK = "walk";
 
-    private final Bucket vehicleBucket = new Bucket();
-    private final Bucket vehicleIceBucket = new Bucket();
-    private final Bucket flightBucket = new Bucket();
-    private final Bucket glideBucket = new Bucket();
-    private final Bucket walkBucket = new Bucket();
+    /**
+     * One token bucket per tier, keyed by tier name (v9: the vehicle family
+     * grew to ten tiers, so a lazily-filled map replaces the old per-field
+     * buckets). Buckets are created by {@link #bucketFor(String)}.
+     *
+     * <p>NOTE: the Check base class calls reload()/onReload() from its
+     * constructor, BEFORE this subclass's field initializers run - at that
+     * point this map is still null, and resetAllBuckets() treats that as a
+     * no-op.</p>
+     */
+    private final Map<String, Bucket> buckets = new HashMap<>();
 
     private double maxHorizontalBps;        // walk tier (existing key)
     private double maxHorizontalBpsVehicle; // vehicle tier (boats, minecarts, horses, ...)
     private double maxHorizontalBpsVehicleIce; // boat-on-ice tier (v8)
+    private double maxHorizontalBpsVehicleBoat;     // boat on water/land (v9)
+    private double maxHorizontalBpsVehicleHorse;    // horse/donkey/mule/undead horses (v9)
+    private double maxHorizontalBpsVehicleCamel;    // camel, incl. dash bursts (v9)
+    private double maxHorizontalBpsVehicleMinecart; // minecart (v9)
+    private double maxHorizontalBpsVehiclePig;      // saddled pig w/ carrot on a stick (v9)
+    private double maxHorizontalBpsVehicleStrider;  // strider on lava (v9)
+    private double maxHorizontalBpsVehicleGhast;    // happy ghast (v9)
+    private double maxHorizontalBpsVehicleNautilus; // nautilus, incl. zombie nautilus (v9)
     private double maxHorizontalBpsFlight;  // vanilla/creative flight tier
     private double maxHorizontalBpsGlide;   // active elytra gliding tier
     private double burstSeconds;
@@ -147,7 +179,7 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
             lastTier = tier;
         }
 
-        if (consume(bucket, distance)) {
+        if (consume(bucket, tier, distance)) {
             reward();
             return;
         }
@@ -187,12 +219,13 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         Vector3d to = move.getPosition();
         double distance = Math.hypot(to.getX() - player.x, to.getZ() - player.z);
 
-        // Vehicles use their own tier: boats/minecarts/horses legitimately move
-        // faster than walking, so the owner may want a different ceiling here.
-        // A boat supported by server-known ice gets the higher vehicle-ice
-        // ceiling (v8) so vanilla ice-boat highways are unrestricted; anything
-        // else - including boat-fly hovering above the ice - stays under the
-        // general vehicle cap.
+        // Vehicles are tiered per entity type (v9): each rideable type gets
+        // its own ceiling defaulting to the fastest that type can reach in
+        // vanilla. A boat supported by server-known ice gets the higher
+        // vehicle-ice ceiling (v8) so vanilla ice-boat highways are
+        // unrestricted; anything else - including boat-fly hovering above the
+        // ice - stays under its type's cap (vehicle-boat for boats) or the
+        // general vehicle fallback.
         final String tier = vehicleTierFor(to);
         final Bucket bucket = bucketFor(tier);
         if (!tier.equals(lastTier)) {
@@ -202,7 +235,7 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
 
         final long now = System.nanoTime();
 
-        if (consume(bucket, distance)) {
+        if (consume(bucket, tier, distance)) {
             reward();
             return;
         }
@@ -308,8 +341,17 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
 
     private List<String> commandsFor(String tier) {
         switch (tier) {
+            // All vehicle-family tiers run the flag-commands-vehicle list.
             case TIER_VEHICLE:
-            case TIER_VEHICLE_ICE: // ice boats are still vehicles; run the vehicle list
+            case TIER_VEHICLE_ICE:
+            case TIER_VEHICLE_BOAT:
+            case TIER_VEHICLE_HORSE:
+            case TIER_VEHICLE_CAMEL:
+            case TIER_VEHICLE_MINECART:
+            case TIER_VEHICLE_PIG:
+            case TIER_VEHICLE_STRIDER:
+            case TIER_VEHICLE_GHAST:
+            case TIER_VEHICLE_NAUTILUS:
                 return flagCommandsVehicle;
             case TIER_GLIDE:
                 return flagCommandsGlide;
@@ -343,18 +385,7 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
     }
 
     private Bucket bucketFor(String tier) {
-        switch (tier) {
-            case TIER_VEHICLE:
-                return vehicleBucket;
-            case TIER_VEHICLE_ICE:
-                return vehicleIceBucket;
-            case TIER_GLIDE:
-                return glideBucket;
-            case TIER_FLIGHT:
-                return flightBucket;
-            default:
-                return walkBucket;
-        }
+        return buckets.computeIfAbsent(tier, t -> new Bucket());
     }
 
     /**
@@ -377,9 +408,44 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
      */
     private String vehicleTierFor(final Vector3d vehiclePos) {
         final PacketEntity riding = player.compensatedEntities.self.getRiding();
-        if (riding == null || !riding.isBoat) {
+        if (riding == null) {
             return TIER_VEHICLE;
         }
+
+        // Per-vehicle-type tiers (v9). Type is taken from the compensated
+        // entity (built from the server's own spawn/metadata packets), so a
+        // modified client cannot claim to be riding a faster vehicle type
+        // than it actually is.
+        if (!riding.isBoat) {
+            // Non-boat vehicles: pick the tier for the entity type. Note that
+            // camels extend PacketEntityHorse, so the camel check must come
+            // before the general horse check. Unknown/other rideables fall
+            // back to the general vehicle tier.
+            if (riding.isHappyGhast) {
+                return TIER_VEHICLE_GHAST;
+            }
+            if (riding.isMinecart) {
+                return TIER_VEHICLE_MINECART;
+            }
+            if (riding instanceof PacketEntityCamel) {
+                return TIER_VEHICLE_CAMEL;
+            }
+            if (riding.isHorse) {
+                return TIER_VEHICLE_HORSE;
+            }
+            if (riding instanceof PacketEntityNautilus) {
+                return TIER_VEHICLE_NAUTILUS;
+            }
+            if (riding instanceof PacketEntityStrider) {
+                return TIER_VEHICLE_STRIDER;
+            }
+            if (riding.getType() == EntityTypes.PIG) {
+                return TIER_VEHICLE_PIG;
+            }
+            return TIER_VEHICLE;
+        }
+        // Boats: fall through to the ice scan below, which decides between
+        // the vehicle-ice tier (boat supported by ice) and vehicle-boat.
 
         // Hull footprint: same box Grim's own boat prediction uses
         // (GetBoundingBox.getPacketEntityBoundingBox), shrunk to a slab just
@@ -411,15 +477,32 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
                 }
             }
         }
-        return TIER_VEHICLE;
+        // Boat not on ice: water/land boat tier.
+        return TIER_VEHICLE_BOAT;
     }
 
     private double rateFor(String tier) {
         switch (tier) {
-            case TIER_VEHICLE:
-                return maxHorizontalBpsVehicle;
             case TIER_VEHICLE_ICE:
                 return maxHorizontalBpsVehicleIce;
+            case TIER_VEHICLE_BOAT:
+                return maxHorizontalBpsVehicleBoat;
+            case TIER_VEHICLE_HORSE:
+                return maxHorizontalBpsVehicleHorse;
+            case TIER_VEHICLE_CAMEL:
+                return maxHorizontalBpsVehicleCamel;
+            case TIER_VEHICLE_MINECART:
+                return maxHorizontalBpsVehicleMinecart;
+            case TIER_VEHICLE_PIG:
+                return maxHorizontalBpsVehiclePig;
+            case TIER_VEHICLE_STRIDER:
+                return maxHorizontalBpsVehicleStrider;
+            case TIER_VEHICLE_GHAST:
+                return maxHorizontalBpsVehicleGhast;
+            case TIER_VEHICLE_NAUTILUS:
+                return maxHorizontalBpsVehicleNautilus;
+            case TIER_VEHICLE:
+                return maxHorizontalBpsVehicle;
             case TIER_GLIDE:
                 return maxHorizontalBpsGlide;
             case TIER_FLIGHT:
@@ -433,17 +516,12 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
      * Consume horizontal distance from the given tier's token bucket,
      * refilling it first based on elapsed time.
      */
-    private boolean consume(final Bucket bucket, double horizontalDistance) {
+    private boolean consume(final Bucket bucket, final String tier, double horizontalDistance) {
         if (!Double.isFinite(horizontalDistance) || horizontalDistance < 0) {
             return false;
         }
 
         final long now = System.nanoTime();
-        final String tier = bucket == vehicleBucket ? TIER_VEHICLE
-                : bucket == vehicleIceBucket ? TIER_VEHICLE_ICE
-                : bucket == glideBucket ? TIER_GLIDE
-                : bucket == flightBucket ? TIER_FLIGHT
-                : TIER_WALK;
         final double capacity = bucketCapacity(tier);
 
         if (bucket.lastRefillNanos == 0L) {
@@ -471,17 +549,15 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
     private void resetAllBuckets() {
         // The Check base class calls reload()/onReload() from its constructor,
         // which runs BEFORE this subclass's field initializers. At that point
-        // the Bucket fields are still null - treat the premature reset as a
+        // the bucket map is still null - treat the premature reset as a
         // no-op. The constructor's own resetAllBuckets() call (after super())
         // performs the real initial fill using the already-loaded rates.
-        if (vehicleBucket == null || vehicleIceBucket == null || flightBucket == null || glideBucket == null || walkBucket == null) {
+        if (buckets == null || buckets.isEmpty()) {
             return;
         }
-        resetBucket(vehicleBucket, TIER_VEHICLE);
-        resetBucket(vehicleIceBucket, TIER_VEHICLE_ICE);
-        resetBucket(flightBucket, TIER_FLIGHT);
-        resetBucket(glideBucket, TIER_GLIDE);
-        resetBucket(walkBucket, TIER_WALK);
+        for (Map.Entry<String, Bucket> entry : buckets.entrySet()) {
+            resetBucket(entry.getValue(), entry.getKey());
+        }
     }
 
     private void resetBucket(Bucket bucket, String tier) {
@@ -502,6 +578,23 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         // vehicle limit so pre-v8 configs behave exactly as before.
         final double vehicleIceBps = config.getDoubleElse("SpeedLimit.max-horizontal-bps-vehicle-ice", -1.0);
         maxHorizontalBpsVehicleIce = vehicleIceBps > 0.0 ? Math.max(1.0, vehicleIceBps) : maxHorizontalBpsVehicle;
+        // Per-vehicle-type tiers (v9). Defaults are the fastest speed each
+        // vehicle type can legitimately reach in vanilla, with a little
+        // headroom for friction/potion variance; absent/-1 falls back to the
+        // general vehicle limit so pre-v9 configs behave exactly as before.
+        // Vanilla maxima: horse 14.23 bps (fastest breed, incl. Speed potion
+        // headroom -> 16.0), boat flat water 8.0 bps, minecart powered rail
+        // 8.0 bps, pig w/ carrot on a stick ~4.19 bps (bursts -> 6.0),
+        // strider on lava w/ boost ~7.34 bps, camel dash burst ~10 bps,
+        // happy ghast ~3.6 bps, nautilus w/ dash ~7.15 bps.
+        maxHorizontalBpsVehicleBoat = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-boat", 12.0, maxHorizontalBpsVehicle);
+        maxHorizontalBpsVehicleHorse = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-horse", 16.0, maxHorizontalBpsVehicle);
+        maxHorizontalBpsVehicleCamel = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-camel", 10.0, maxHorizontalBpsVehicle);
+        maxHorizontalBpsVehicleMinecart = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-minecart", 9.0, maxHorizontalBpsVehicle);
+        maxHorizontalBpsVehiclePig = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-pig", 6.0, maxHorizontalBpsVehicle);
+        maxHorizontalBpsVehicleStrider = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-strider", 8.0, maxHorizontalBpsVehicle);
+        maxHorizontalBpsVehicleGhast = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-ghast", 5.0, maxHorizontalBpsVehicle);
+        maxHorizontalBpsVehicleNautilus = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-nautilus", 8.0, maxHorizontalBpsVehicle);
         burstSeconds = Math.max(0.05, config.getDoubleElse("SpeedLimit.burst-seconds", 0.25));
         vehicleAlertIntervalSeconds = Math.max(0.05, config.getDoubleElse("SpeedLimit.vehicle-alert-interval-seconds", 1.0));
         flagCommands = commandList(config, "SpeedLimit.flag-commands");
@@ -510,6 +603,16 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         flagCommandsGlide = commandList(config, "SpeedLimit.flag-commands-glide");
         flagCommandsWalk = commandList(config, "SpeedLimit.flag-commands-walk");
         resetAllBuckets();
+    }
+
+    /**
+     * Reads a per-vehicle-type speed limit. Absent/-1 falls back to the
+     * general vehicle limit (pre-v9 configs behave exactly as before); the
+     * in-code default applies only when config loading itself fails.
+     */
+    private double vehicleTypeBps(@NotNull ConfigManager config, String key, double defaultBps, double vehicleBps) {
+        final double value = config.getDoubleElse(key, defaultBps);
+        return value > 0.0 ? Math.max(1.0, value) : vehicleBps;
     }
 
     /** Reads a command list from config, tolerating absent/null entries. */
