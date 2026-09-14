@@ -49,6 +49,7 @@
 > | Nautilus (incl. dash) | `SpeedLimit.max-horizontal-bps-vehicle-nautilus` | 8.0 |
 > | Boat on ice / packed / blue ice (verified server-side) | `SpeedLimit.max-horizontal-bps-vehicle-ice` | 80.0 |
 > | Lunge window after a spear jab | `SpeedLimit.lunge-window-seconds` | 2.0 |
+> | Riptide window after a trident launch (v1.2) | `SpeedLimit.riptide-window-seconds` | 2.0 |
 >
 > Short lag/knockback/piston transients are absorbed by `burst-seconds` (0.25 s). Vehicle violations
 > (`VEHICLE_MOVE`, e.g. boat-fly) cancel **every** offending packet **and** trigger a real Grim setback; flag output is throttled

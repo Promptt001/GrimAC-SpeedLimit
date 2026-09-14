@@ -27,8 +27,10 @@ import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.protocol.world.states.type.StateType;
 import com.github.retrooper.packetevents.protocol.world.states.type.StateTypes;
 import com.github.retrooper.packetevents.util.Vector3d;
+import com.github.retrooper.packetevents.protocol.player.DiggingAction;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientAttack;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientInteractEntity;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerDigging;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientVehicleMove;
 import org.jetbrains.annotations.NotNull;
 
@@ -135,6 +137,7 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
     private double burstSeconds;
     private double vehicleAlertIntervalSeconds;
     private long lungeWindowMillis;         // how long a Lunge jab keeps the lunge tier active (v10)
+    private long riptideWindowMillis;       // how long a Riptide launch keeps the riptide tier active (v11)
 
     /** Console commands executed on every emitted flag, all tiers. */
     private List<String> flagCommands = new ArrayList<>();
@@ -168,6 +171,22 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
      * 0 = no Lunge jab seen yet (or the window has been allowed to lapse).
      */
     private long lastLungeAttackNanos;
+
+    /**
+     * Timestamp (System.nanoTime) of the last accepted Riptide launch
+     * (release-use of a Riptide trident in server-verified water/rain).
+     * 0 = no launch seen yet (or the window has been allowed to lapse).
+     *
+     * <p>v11: live-server testing of v10 showed real Riptide III launches in
+     * a thunderstorm flagged as tier=walk - neither isRiptidePose (self
+     * metadata index 8 bit 0x04, transaction-synced, only sent on change) nor
+     * tryingToRiptide (cleared at the end of every processed movement, before
+     * SpeedLimit's position listener runs) was set on any sampled movement.
+     * The launch window sees the RELEASE_USE_ITEM packet directly and holds
+     * the riptide tier for riptide-window-seconds, mirroring the proven lunge
+     * window design.</p>
+     */
+    private long lastRiptideLaunchNanos;
 
 
 
@@ -246,6 +265,13 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         // the lunge-tier ceiling while attacking (still rate-capped), and vanilla
         // limits Lunge activation to a successful hit landing on an entity, so the
         // window only opens for attacks the server actually processes.
+        // Riptide launches (v11): the release-use packet is the deterministic
+        // launch signal; open the riptide window before anything else so the
+        // launch movement is tiered as riptide, not walk.
+        if (event.getPacketType() == PacketType.Play.Client.PLAYER_DIGGING) {
+            maybeOpenRiptideWindow(event);
+        }
+
         if (isAttackPacket(event)) {
             maybeOpenLungeWindow(event);
             // fall through - a Lunge jab while mounted is impossible (vanilla
@@ -428,16 +454,21 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         if (player.inVehicle()) {
             return TIER_VEHICLE;
         }
-        // Riptide (v10): a trident launch applies 3x(1+level)/4 blocks/tick of
-        // velocity in one burst (60 bps at Riptide III). Two transaction-synced
-        // signals cover it: the client's own shared-entity flags pose bit
-        // (isRiptidePose, set from self metadata the server echoes) is authoritative
-        // for the ~20-tick spin attack; tryingToRiptide covers the launch tick
-        // before the pose flips, and the prediction engine clears it within one
-        // movement tick if it is bogus (it re-validates the water/rain/450ms
-        // conditions on the next processed movement). Riptide is impossible while
-        // gliding or riding, so ordering relative to those tiers does not matter.
-        if (player.isRiptidePose || player.packetStateData.tryingToRiptide) {
+        // Riptide (v10/v11): a trident launch applies 3x(1+level)/4 blocks/tick
+        // of velocity in one burst (60 bps at Riptide III). Two signals cover
+        // it: the client's own shared-entity flags pose bit (isRiptidePose, set
+        // from self metadata the server echoes) covers the spin attack while
+        // the server keeps re-sending it; and the v11 launch window sees the
+        // RELEASE_USE_ITEM packet directly (compensated Riptide trident in hand
+        // + server-verified water/rain via isInWaterOrRain) and holds the
+        // riptide tier for riptide-window-seconds after each launch. v10's
+        // tryingToRiptide gate was removed from tier selection: live testing
+        // (Riptide III in a thunderstorm) showed every movement flagging as
+        // tier=walk - the prediction engine clears tryingToRiptide at the end
+        // of every processed movement, before SpeedLimit's position listener
+        // runs (PredictionRunner registers before SpeedLimit). Riptide is
+        // impossible while gliding or riding, so ordering is unaffected.
+        if (player.isRiptidePose || riptideWindowActive()) {
             return TIER_RIPTIDE;
         }
         if (player.isGliding) {
@@ -460,6 +491,47 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
     private boolean lungeWindowActive() {
         return lastLungeAttackNanos != 0L
                 && (System.nanoTime() - lastLungeAttackNanos) / 1_000_000.0 < lungeWindowMillis;
+    }
+
+    /**
+     * Whether the configured Riptide launch window is currently open, i.e. a
+     * Riptide launch was accepted recently enough that the launch momentum may
+     * still be carrying the player above the walk limit. Chained launches
+     * (storm travel) re-arm the window on each throw.
+     */
+    private boolean riptideWindowActive() {
+        return lastRiptideLaunchNanos != 0L
+                && (System.nanoTime() - lastRiptideLaunchNanos) / 1_000_000.0 < riptideWindowMillis;
+    }
+
+    /**
+     * Opens the riptide window when the player releases item use while holding
+     * a Riptide trident, per the compensated inventory (server-known contents)
+     * and server-verified water/rain (isInWaterOrRain uses the compensated
+     * world's rain state and actual water blocks near the player). A modified
+     * client cannot gain from faking the release packet: without real water or
+     * rain the vanilla server never applies launch velocity, and the window
+     * only raises the ceiling to the riptide tier's (still rate-capped) limit.
+     */
+    private void maybeOpenRiptideWindow(final PacketReceiveEvent event) {
+        if (event.getPacketType() != PacketType.Play.Client.PLAYER_DIGGING) {
+            return;
+        }
+        if (new WrapperPlayClientPlayerDigging(event).getAction() != DiggingAction.RELEASE_USE_ITEM) {
+            return;
+        }
+
+        final ItemStack held = player.inventory.getHeldItem();
+        if (held.getType() != ItemTypes.TRIDENT
+                || held.getEnchantmentLevel(EnchantmentTypes.RIPTIDE) <= 0) {
+            return;
+        }
+
+        if (!player.isInWaterOrRain()) {
+            return;
+        }
+
+        lastRiptideLaunchNanos = System.nanoTime();
     }
 
     /**
@@ -759,6 +831,11 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         // jabs are cooldown-gated (fastest spear ~1.5/s), so 2.0s covers the whole
         // decay plus the next jab without letting the tier linger indefinitely.
         lungeWindowMillis = (long) Math.max(100.0, config.getDoubleElse("SpeedLimit.lunge-window-seconds", 2.0) * 1000.0);
+        // v11: how long a Riptide launch keeps the riptide tier active. The
+        // launch momentum decays within ~1 s (air drag); chaining launches in
+        // a storm re-arms the window per throw, so 2.0 s covers a launch plus
+        // immediate follow-up without letting the tier linger indefinitely.
+        riptideWindowMillis = (long) Math.max(100.0, config.getDoubleElse("SpeedLimit.riptide-window-seconds", 2.0) * 1000.0);
         burstSeconds = Math.max(0.05, config.getDoubleElse("SpeedLimit.burst-seconds", 0.25));
         vehicleAlertIntervalSeconds = Math.max(0.05, config.getDoubleElse("SpeedLimit.vehicle-alert-interval-seconds", 1.0));
         flagCommands = commandList(config, "SpeedLimit.flag-commands");

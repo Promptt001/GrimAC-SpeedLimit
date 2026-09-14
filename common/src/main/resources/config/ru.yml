@@ -289,6 +289,10 @@ SpeedLimit:
     # The jab momentum decays within ~0.5s on the ground (longer midair) and
     # jabs are attack-cooldown gated, so 2.0s covers the full decay.
     lunge-window-seconds: 2.0
+    # Seconds after a Riptide launch during which the riptide tier applies
+    # (chained launches re-open the window on each throw).
+    riptide-window-seconds: 2.0
+
     burst-seconds: 0.25
     # Minimum seconds between SpeedLimit flags (alerts/logs) on the VEHICLE_MOVE
     # path. Sustained vehicle-speed violations (e.g. boat-fly) emit packets many
