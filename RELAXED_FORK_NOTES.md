@@ -9,7 +9,7 @@ This fork is aimed at servers where automation and non-vanilla movement behavior
 - Grim's normal simulation/timer/no-fall/no-slow/sprint/elytra-state checks are disabled by the default `punishments/en.yml` profile.
 - Packet/crash protections remain enabled.
 - Reach/hitbox/aim/interact combat checks remain enabled by default.
-- A new `SpeedLimit` check caps **sustained horizontal travel** at 40 blocks/second.
+- A new `SpeedLimit` check caps **sustained horizontal travel**, with an independent configurable ceiling per movement state (defaults: walk 8 / flight 8 / glide 40 / vehicle 12 bps, plus per-vehicle-type, ice-boat, riptide, and spear-lunge tiers).
 - The speed cap applies to normal player movement and client-driven vehicle movement, each state with its own configurable ceiling.
 - Optional console commands can run when `SpeedLimit` flags (e.g. `nosavekick %player%`), globally or per movement tier.
 - Server teleports are ignored.
@@ -108,7 +108,7 @@ SpeedLimit:
 
 **Vehicle desync fix (v5):** cancelling a VEHICLE_MOVE packet alone is invisible to the client — the server drops it and never tells the client anything, so a boat-fly client keeps flying locally while the server (and observers) see it frozen, until vanilla Paper's floating-vehicle check kicks it. The vehicle path therefore now also calls `SetbackTeleportUtil.executeViolationSetback()` on every violating packet, which sends the stock dismount + vehicle-teleport + player-teleport sequence to the client so it actually perceives the correction (`blockMovementsUntilResync` self-throttles via `isPendingSetback`).
 
-The three tiers use separate token buckets, and all buckets are reset whenever the tier changes, so allowance cannot be banked in a cheap tier and spent in an expensive one.
+Every tier uses its own token bucket, and all buckets are reset whenever the tier changes, so allowance cannot be banked in a cheap tier and spent in an expensive one.
 
 At 40 b/s with `burst-seconds: 0.25`, a one-off horizontal burst of up to roughly 10 blocks can be tolerated, but the bucket only refills at 40 blocks per real-world second. This makes the limiter substantially less sensitive to packet bunching, latency, knockback, and similar short transients.
 
@@ -125,6 +125,7 @@ The ready-built Paper jar in [Releases](../../releases) is produced with the sta
 ## Verified environments
 
 - **Paper 1.21.11** (live server, sessions 6–8): walk tier confirmed flagging in production; elytra-glide tier observed flagging at a 50 b/s cap; vehicle (boat-fly) path tested — flags throttled to ~1/s, setback teleport verified working from v5 on.
-- **Paper 26.2-121** (clean boot test): plugin enables with zero errors, bundled packetevents 2.13.1 loads `V_26_2` mappings, default config generates with the 8/8/40/12 tier values, `grim help` / `grim reload` (full `SpeedLimit.onReload` path) run clean. Minecraft 26.2 = protocol 776; the 26.1/26.2 entity-metadata changes in upstream (already part of base `61caa53e`) are included.
+- **Paper 26.2-121** (clean boot test): plugin enables with zero errors, bundled packetevents 2.13.1 loads `V_26_2` mappings, `grim help` / `grim reload` (full `SpeedLimit.onReload` path) run clean. Minecraft 26.2 = protocol 776; the 26.1/26.2 entity-metadata changes in upstream (already part of base `61caa53e`) are included. Re-verified at v8 (fresh config generated with all 13 SpeedLimit keys incl. the ice key) and at v10 (fresh config with all 25 keys; two consecutive clean `grim reload` runs).
+- **Paper 1.21.11** (live server): v9/v10 tiers pending in-game verification — defaults are sized from current vanilla maxima (see per-tier notes above).
 
 The SpeedLimit check itself is version-independent packet math (horizontal `hypot(dx, dz)` token buckets), so behavior on 26.2 matches 1.21.x.

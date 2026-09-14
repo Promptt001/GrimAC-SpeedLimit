@@ -62,6 +62,18 @@
 > default config + reload OK) and field-verified on Paper 1.21.11 (walk/glide/vehicle tiers). See
 > [RELAXED_FORK_NOTES.md](RELAXED_FORK_NOTES.md) → *Verified environments*.
 
+> [!TIP]
+> # Fork release history
+>
+> | Release | Highlights |
+> |---|---|
+> | `v2.3.74-speedlimit` | First public release: SpeedLimit check with 4 tiers (walk/flight/glide/vehicle), flag commands, relaxed punishments profile. Defaults 8/8/40/12 bps. |
+> | `v2.3.74-speedlimit-26.2` | Same jar, verified on Minecraft 26.2 (Paper 26.2-121 boot test). Docs updated. |
+> | `v2.3.74-speedlimit-iceboat` | New `vehicle-ice` tier: boats on server-verified ice get their own high ceiling (default 80 bps) — vanilla blue-ice highways no longer false-flag; boat-fly mid-air stays capped. |
+> | `v2.3.74-speedlimit-v1.1` (latest) | **Fixes:** fast horses no longer false-flag (per-vehicle-type tiers, defaults at vanilla maxima), Riptide trident launches and 1.21.11 spear-lunge attacks no longer rubber-band (new `riptide`/`lunge` tiers), boats on legit ice highways stay fast while boat-fly remains capped. All new keys are optional — old configs behave exactly as before. 25 SpeedLimit config keys. See the [latest release](../../releases/latest) for the full changelog. |
+>
+> The `2.3.74` part is the upstream GrimAC version (the fork does not increment it); `speedlimit-vX.Y` is the fork's own release line.
+
 GrimAC is an open source Minecraft anticheat designed to support the latest versions of Minecraft.
 It currently supports Minecraft versions 1.8–26.2. Geyser players are fully exempt from the anticheat to prevent false positives.
 This project is considered feature-complete for the 2.0 (open-source) branch. If you would like a bug fix or enhancement and cannot sponsor the work, pull requests are welcome.
