@@ -277,6 +277,20 @@ SpeedLimit:
     max-horizontal-bps-vehicle-strider: 8.0
     max-horizontal-bps-vehicle-ghast: 5.0
     max-horizontal-bps-vehicle-nautilus: 8.0
+    # Horizontal ceiling while flying with a Riptide trident spin attack
+    # (launched from water or rain). A Riptide III launch applies 3 blocks/tick
+    # of velocity in one burst (60 bps); sustained speed is far lower as the
+    # momentum decays. Omit or set to -1 to reuse the walk limit (pre-v10).
+    max-horizontal-bps-riptide: 60.0
+    # Horizontal ceiling while moving under spear-Lunge (1.21.11) jab momentum.
+    # A Lunge III jab applies 1.374 blocks/tick (27.48 bps); 28.0 gives
+    # headroom for the decay ticks that follow. Omit or set to -1 to reuse
+    # the walk limit (pre-v10 behavior - spear jabs rubber-band).
+    max-horizontal-bps-lunge: 28.0
+    # Seconds after a Lunge jab attack during which the lunge tier applies.
+    # The jab momentum decays within ~0.5s on the ground (longer midair) and
+    # jabs are attack-cooldown gated, so 2.0s covers the full decay.
+    lunge-window-seconds: 2.0
     burst-seconds: 0.25
     # Minimum seconds between SpeedLimit flags (alerts/logs) on the VEHICLE_MOVE
     # path. Sustained vehicle-speed violations (e.g. boat-fly) emit packets many
@@ -289,7 +303,7 @@ SpeedLimit:
     # flags are already throttled to one per vehicle-alert-interval-seconds,
     # so the commands are too. A leading slash is optional.
     # Placeholders: %player% (alias %player_name%), %uuid%, %tier%.
-    # Per-tier lists: flag-commands-vehicle / -flight / -glide / -walk.
+    # Per-tier lists: flag-commands-vehicle / -flight / -glide / -riptide / -lunge / -walk.
     # Example:
     #   flag-commands:
     #     - "nosavekick %player%"
@@ -299,5 +313,7 @@ SpeedLimit:
     flag-commands-flight: []
     flag-commands-glide: []
     flag-commands-walk: []
+    flag-commands-riptide: []
+    flag-commands-lunge: []
     setbackvl: 0
 

@@ -19,10 +19,16 @@ import ac.grim.grimac.utils.data.packetentity.PacketEntityStrider;
 import ac.grim.grimac.utils.nmsutil.GetBoundingBox;
 import com.github.retrooper.packetevents.event.PacketReceiveEvent;
 import com.github.retrooper.packetevents.protocol.entity.type.EntityTypes;
+import com.github.retrooper.packetevents.protocol.item.ItemStack;
+import com.github.retrooper.packetevents.protocol.item.enchantment.type.EnchantmentTypes;
+import com.github.retrooper.packetevents.protocol.item.type.ItemType;
+import com.github.retrooper.packetevents.protocol.item.type.ItemTypes;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.protocol.world.states.type.StateType;
 import com.github.retrooper.packetevents.protocol.world.states.type.StateTypes;
 import com.github.retrooper.packetevents.util.Vector3d;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientAttack;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientInteractEntity;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientVehicleMove;
 import org.jetbrains.annotations.NotNull;
 
@@ -50,6 +56,14 @@ import java.util.Map;
  * else. Boats supported by ice get their own higher tier (v8 - lets vanilla
  * ice-boat highways run at full speed while a low boat cap still stops
  * boat-fly).</p>
+ *
+ * <p>Two additional tiers cover server-granted momentum bursts (v10): the
+ * riptide tier for trident launches (gated on the transaction-synced spin
+ * attack pose / launch attempt, default 60 bps = Riptide III launch speed) and
+ * the lunge tier for 1.21.11 spear-Lunge jabs (a short window opened by an
+ * attack while holding a Lunge spear per the compensated inventory, default
+ * 28 bps = Lunge III jab speed). Both fall back to the walk limit when
+ * unconfigured.</p>
  *
  * <p>The vehicle-ice tier is selected only when the riding entity is a boat
  * AND the compensated (server-authoritative, transaction-synced) world shows
@@ -87,6 +101,8 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
     private static final String TIER_VEHICLE_NAUTILUS = "vehicle-nautilus";
     private static final String TIER_FLIGHT = "flight";
     private static final String TIER_GLIDE = "elytra-glide";
+    private static final String TIER_RIPTIDE = "riptide";
+    private static final String TIER_LUNGE = "lunge";
     private static final String TIER_WALK = "walk";
 
     /**
@@ -114,8 +130,11 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
     private double maxHorizontalBpsVehicleNautilus; // nautilus, incl. zombie nautilus (v9)
     private double maxHorizontalBpsFlight;  // vanilla/creative flight tier
     private double maxHorizontalBpsGlide;   // active elytra gliding tier
+    private double maxHorizontalBpsRiptide; // riptide spin-attack launch tier (v10)
+    private double maxHorizontalBpsLunge;   // spear-Lunge jab burst tier (v10)
     private double burstSeconds;
     private double vehicleAlertIntervalSeconds;
+    private long lungeWindowMillis;         // how long a Lunge jab keeps the lunge tier active (v10)
 
     /** Console commands executed on every emitted flag, all tiers. */
     private List<String> flagCommands = new ArrayList<>();
@@ -123,6 +142,8 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
     private List<String> flagCommandsVehicle = new ArrayList<>();
     private List<String> flagCommandsFlight = new ArrayList<>();
     private List<String> flagCommandsGlide = new ArrayList<>();
+    private List<String> flagCommandsRiptide = new ArrayList<>();
+    private List<String> flagCommandsLunge = new ArrayList<>();
     private List<String> flagCommandsWalk = new ArrayList<>();
 
     /**
@@ -141,6 +162,12 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
      * rate (or on teleport / tier transition / dismount resets).</p>
      */
     private long lastVehicleAlertNanos;
+
+    /**
+     * Timestamp (System.nanoTime) of the last accepted Lunge jab attack.
+     * 0 = no Lunge jab seen yet (or the window has been allowed to lapse).
+     */
+    private long lastLungeAttackNanos;
 
 
 
@@ -201,6 +228,28 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         if (!isEnabled()) {
             resetAllBuckets();
             return;
+        }
+
+        // Spear-Lunge jabs (1.21.11 Mounts of Mayhem) apply an instant horizontal
+        // momentum boost to the wielder (0.458 blocks/tick per Lunge level, per
+        // vanilla) whenever a jab attack is performed. The boost is applied by the
+        // vanilla server itself, but the resulting client movement shows up as a
+        // walk-tier rate spike that the token bucket rejects, producing the
+        // rubber-banding testers reported. Detect a jab here - ATTACK packet or
+        // INTERACT_ENTITY with the ATTACK action - while the compensated (server-
+        // known) held item is a Lunge spear, and open a short window during which
+        // the lunge tier applies so the server-granted momentum is not flagged.
+        // Both the held item and the attack are things the client cannot usefully
+        // spoof: the item is tracked from the server's own slot packets, and an
+        // attack packet without a real server-side jab produces no momentum. A
+        // cheater spamming attack packets to hold the lunge tier open gains only
+        // the lunge-tier ceiling while attacking (still rate-capped), and vanilla
+        // limits Lunge activation to a successful hit landing on an entity, so the
+        // window only opens for attacks the server actually processes.
+        if (isAttackPacket(event)) {
+            maybeOpenLungeWindow(event);
+            // fall through - a Lunge jab while mounted is impossible (vanilla
+            // disables Lunge when riding), so vehicle handling below is unaffected.
         }
 
         // Player movement is handled by onPositionUpdate. Vehicles need to be
@@ -355,6 +404,10 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
                 return flagCommandsVehicle;
             case TIER_GLIDE:
                 return flagCommandsGlide;
+            case TIER_RIPTIDE:
+                return flagCommandsRiptide;
+            case TIER_LUNGE:
+                return flagCommandsLunge;
             case TIER_FLIGHT:
                 return flagCommandsFlight;
             default:
@@ -375,13 +428,101 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         if (player.inVehicle()) {
             return TIER_VEHICLE;
         }
+        // Riptide (v10): a trident launch applies 3x(1+level)/4 blocks/tick of
+        // velocity in one burst (60 bps at Riptide III). Two transaction-synced
+        // signals cover it: the client's own shared-entity flags pose bit
+        // (isRiptidePose, set from self metadata the server echoes) is authoritative
+        // for the ~20-tick spin attack; tryingToRiptide covers the launch tick
+        // before the pose flips, and the prediction engine clears it within one
+        // movement tick if it is bogus (it re-validates the water/rain/450ms
+        // conditions on the next processed movement). Riptide is impossible while
+        // gliding or riding, so ordering relative to those tiers does not matter.
+        if (player.isRiptidePose || player.packetStateData.tryingToRiptide) {
+            return TIER_RIPTIDE;
+        }
         if (player.isGliding) {
             return TIER_GLIDE;
         }
         if (player.isFlying) {
             return TIER_FLIGHT;
         }
+        if (lungeWindowActive()) {
+            return TIER_LUNGE;
+        }
         return TIER_WALK;
+    }
+
+    /**
+     * Whether the configured Lunge window is currently open, i.e. a Lunge jab
+     * attack was accepted recently enough that the resulting momentum may still
+     * be carrying the player at above-walk speed.
+     */
+    private boolean lungeWindowActive() {
+        return lastLungeAttackNanos != 0L
+                && (System.nanoTime() - lastLungeAttackNanos) / 1_000_000.0 < lungeWindowMillis;
+    }
+
+    /**
+     * True when this packet is an entity attack (the modern ATTACK packet, or
+     * INTERACT_ENTITY with the ATTACK action as older/other clients send).
+     */
+    private static boolean isAttackPacket(final PacketReceiveEvent event) {
+        if (event.getPacketType() == PacketType.Play.Client.ATTACK) {
+            return true;
+        }
+        if (event.getPacketType() == PacketType.Play.Client.INTERACT_ENTITY) {
+            try {
+                return new WrapperPlayClientInteractEntity(event).getAction()
+                        == WrapperPlayClientInteractEntity.InteractAction.ATTACK;
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Opens the lunge window when the player performs an attack while holding a
+     * spear enchanted with Lunge (per the compensated inventory - server-known
+     * item contents). The window is only opened when the attack targets an
+     * entity the server has actually spawned (compensated entity map), since
+     * vanilla requires a successful hit on an entity for Lunge to activate.
+     */
+    private void maybeOpenLungeWindow(final PacketReceiveEvent event) {
+        // getHeldItem() never returns null (falls back to ItemStack.EMPTY, whose
+        // type is AIR - rejected by isSpear), so no null handling is needed.
+        final ItemStack held = player.inventory.getHeldItem();
+        if (!isSpear(held.getType()) || held.getEnchantmentLevel(EnchantmentTypes.LUNGE) <= 0) {
+            return;
+        }
+
+        final int targetEntityId = getAttackTargetEntityId(event);
+        if (targetEntityId < 0
+                || player.compensatedEntities.entityMap.get(targetEntityId) == null) {
+            return;
+        }
+
+        lastLungeAttackNanos = System.nanoTime();
+    }
+
+    /** Entity id targeted by an attack packet, or -1 when unavailable. */
+    private static int getAttackTargetEntityId(final PacketReceiveEvent event) {
+        try {
+            if (event.getPacketType() == PacketType.Play.Client.ATTACK) {
+                return new WrapperPlayClientAttack(event).getEntityId();
+            }
+            return new WrapperPlayClientInteractEntity(event).getEntityId();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /** All seven spear material tiers added in 1.21.11 Mounts of Mayhem. */
+    private static boolean isSpear(final ItemType type) {
+        return type == ItemTypes.WOODEN_SPEAR || type == ItemTypes.STONE_SPEAR
+                || type == ItemTypes.COPPER_SPEAR || type == ItemTypes.IRON_SPEAR
+                || type == ItemTypes.GOLDEN_SPEAR || type == ItemTypes.DIAMOND_SPEAR
+                || type == ItemTypes.NETHERITE_SPEAR;
     }
 
     private Bucket bucketFor(String tier) {
@@ -505,6 +646,10 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
                 return maxHorizontalBpsVehicle;
             case TIER_GLIDE:
                 return maxHorizontalBpsGlide;
+            case TIER_RIPTIDE:
+                return maxHorizontalBpsRiptide;
+            case TIER_LUNGE:
+                return maxHorizontalBpsLunge;
             case TIER_FLIGHT:
                 return maxHorizontalBpsFlight;
             default:
@@ -595,12 +740,33 @@ public class SpeedLimit extends Check implements PositionListener, PrePrediction
         maxHorizontalBpsVehicleStrider = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-strider", 8.0, maxHorizontalBpsVehicle);
         maxHorizontalBpsVehicleGhast = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-ghast", 5.0, maxHorizontalBpsVehicle);
         maxHorizontalBpsVehicleNautilus = vehicleTypeBps(config, "SpeedLimit.max-horizontal-bps-vehicle-nautilus", 8.0, maxHorizontalBpsVehicle);
+        // Riptide tier (v10). A Riptide III launch applies 3 blocks/tick of
+        // velocity (60 bps) in one burst; the sustained travel speed is far lower
+        // as air drag decays the momentum, so 60.0 with the shared burst-seconds
+        // allowance (0.25s -> 15-block capacity) tolerates the launch tick without
+        // insta-flagging. The wiki's ~375 m/s figure is stacked ice/Depth
+        // Strider/Dolphin's Grace chains, not the bare launch. Absent/-1 falls
+        // back to the walk limit so pre-v10 configs behave exactly as before.
+        final double riptideBps = config.getDoubleElse("SpeedLimit.max-horizontal-bps-riptide", -1.0);
+        maxHorizontalBpsRiptide = riptideBps > 0.0 ? Math.max(1.0, riptideBps) : maxHorizontalBps;
+        // Lunge tier (v10). A Lunge III jab applies 1.374 blocks/tick (27.48 bps)
+        // of horizontal momentum; 28.0 default with headroom for the follow-through
+        // of successive ticks as the boost decays. Absent/-1 -> walk limit.
+        final double lungeBps = config.getDoubleElse("SpeedLimit.max-horizontal-bps-lunge", -1.0);
+        maxHorizontalBpsLunge = lungeBps > 0.0 ? Math.max(1.0, lungeBps) : maxHorizontalBps;
+        // Window during which the lunge tier applies after a jab; the momentum
+        // decays within ~10 ticks (0.5s) on the ground and a few more midair, and
+        // jabs are cooldown-gated (fastest spear ~1.5/s), so 2.0s covers the whole
+        // decay plus the next jab without letting the tier linger indefinitely.
+        lungeWindowMillis = (long) Math.max(100.0, config.getDoubleElse("SpeedLimit.lunge-window-seconds", 2.0) * 1000.0);
         burstSeconds = Math.max(0.05, config.getDoubleElse("SpeedLimit.burst-seconds", 0.25));
         vehicleAlertIntervalSeconds = Math.max(0.05, config.getDoubleElse("SpeedLimit.vehicle-alert-interval-seconds", 1.0));
         flagCommands = commandList(config, "SpeedLimit.flag-commands");
         flagCommandsVehicle = commandList(config, "SpeedLimit.flag-commands-vehicle");
         flagCommandsFlight = commandList(config, "SpeedLimit.flag-commands-flight");
         flagCommandsGlide = commandList(config, "SpeedLimit.flag-commands-glide");
+        flagCommandsRiptide = commandList(config, "SpeedLimit.flag-commands-riptide");
+        flagCommandsLunge = commandList(config, "SpeedLimit.flag-commands-lunge");
         flagCommandsWalk = commandList(config, "SpeedLimit.flag-commands-walk");
         resetAllBuckets();
     }
